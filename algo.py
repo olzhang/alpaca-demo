@@ -65,7 +65,10 @@ class Algo:
         for x in range(200, len(symbols), 200):
             logger.info("requesting for the next {} symbols".format(str(x)))
             barset.update(self.__get_iex_barset_prices(symbols[x:x+200], from_date=from_date, to_date=to_date))
-        return barset
+        
+        return pd.Series(barset).apply(lambda x: pd.Series({ k: v for y in x for k, v in y.items() }))
+
+
 
     def main(self):
         while True:
