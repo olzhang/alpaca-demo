@@ -6,10 +6,10 @@ name = "pypi"
 [packages]
 alpaca-trade-api = "*"
 
-
 [dev-packages]
 jupyter = "*"
 matplotlib = "*"
+pylint = "*"
 
 [requires]
 python_version = "3.7"
