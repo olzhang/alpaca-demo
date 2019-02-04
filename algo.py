@@ -13,8 +13,8 @@ logger = logging.getLogger(__file__)
 
 TOMORROW = datetime.now() + timedelta(days=1)
 
-os.environ["APCA_API_KEY_ID"] = "PK245VP228X87GRHN348"
-os.environ["APCA_API_SECRET_KEY"] = "0oGyagzsBGUB/q70VNuw91FDKQTu5JeP4e6eZMYY"
+os.environ["APCA_API_KEY_ID"] = "PK3VJ3DGTT989D8AE45L"
+os.environ["APCA_API_SECRET_KEY"] = "NmMBrOwibFXo1n4by7MXb7ujhVN5QHkDEU0Q8Aau"
 
 NY = "America/New_York"
 
@@ -30,13 +30,13 @@ class Algo:
         self.orders = []
 
         self.max_risk_diff = -0.1
-        self.position_size = 100
-        self.max_positions = 5
-        self.since = 4
+        self.position_size = 150 # dollar value of a position of stock (# symbol * $ per symbol)
+        self.max_positions = 100 # how many symbols do we hold?
+        self.since = 3
 
-        self.limit_bars = 100
         self.end_dt = pd.Timestamp.now(tz=NY)
         self.interval = "5Min"
+        self.limit_bars = min(5*4, 100)
 
         self.done = done
         self.api = tradeapi.REST(base_url="https://paper-api.alpaca.markets")
@@ -45,7 +45,6 @@ class Algo:
         self.load_universe()
         self.set_barsets()
         self.set_scores()
-        self.set_orders()
 
     def get_df_barset(self):
         return self.df_barset
@@ -119,16 +118,16 @@ class Algo:
         return r.json()
 
     def _build_iex_df_barset(self, date_to_query):
-        logger.info("calling alpaca data api to get iex stats on {} symbols for {} hours".format(str(len(self.symbols)), self.since))
+        logger.debug("calling alpaca data api to get iex stats on {} symbols for {} hours".format(str(len(self.symbols)), self.since))
 
         from_date = (date_to_query - pd.Timedelta("{} hours".format(self.since))).strftime("%Y-%m-%d")
         to_date = date_to_query.strftime("%Y-%m-%d")
 
         # queries 200 of them at the same time
-        logger.info("requesting for the first 200 symbols")
+        logger.debug("requesting for the first 200 symbols")
         barset = self.__query_iex_barset(self.symbols[0:200], from_date=from_date, to_date=to_date)
         for x in range(200, len(self.symbols), 200):
-            logger.info("requesting for the next {} symbols".format(str(x)))
+            logger.debug("requesting for the next {} symbols".format(str(x)))
             barset.update(self.__query_iex_barset(self.symbols[x:x+200], from_date=from_date, to_date=to_date))
         
         data = {'ticker': [], 't': [], 'o': [], 'h': [], 'l': [], 'c': [], 'v': []}
@@ -155,12 +154,12 @@ class Algo:
         for symbol in self.df_barset.index.levels[0]:
             df = self.df_barset.xs(str(symbol))
             if len(df.c.values) <= param:
-                logger.info("{} has {} values less than {}".format(symbol, str(len(df.c.values), param)))
+                logger.debug("{} has {} values less than {}".format(symbol, str(len(df.c.values), param)))
                 continue
             ema = df.c.ewm(span=param).mean()[-1]
             last = df.c.values[-1]
             diff = (last - ema) / last
-            logger.info("{} closed at {} on {} ema: {} diff: {} ".format(symbol, df.c.values[-1], self.df_barset.iloc[-1].name[1], str(ema), str(diff)))
+            logger.debug("{} closed at {} on {} ema: {} diff: {} ".format(symbol, df.c.values[-1], self.df_barset.iloc[-1].name[1], str(ema), str(diff)))
             
             if diff < self.max_risk_diff:
                 logger.warning("{} below max_risk_diff: {}".format(symbol, self.max_risk_diff))
@@ -188,9 +187,9 @@ class Algo:
 
         # get existing portfolio
         positions = self.api.list_positions()
-        logger.info("current positions: {}".format(positions))
         holdings = {p.symbol: p for p in positions}
         current_position_symbols = set(holdings.keys())
+        logger.info("current_position_symbols: {}".format({p.symbol: p.qty for p in positions}))
         # sell all the ones that are not in to_buy
         to_sell_symbols = current_position_symbols - to_buy_symbols
         logger.info("to_sell_symbols: {}".format(to_sell_symbols))
@@ -205,14 +204,14 @@ class Algo:
 
         # build sell orders ...
         for symbol in to_sell_symbols:
-            sell_order = { "symbol": symbol, "qty": symbol["qty"], "side": "sell" }
+            sell_order = { "symbol": symbol, "qty": holdings[symbol].qty, "side": "sell" }
             logger.info("orders to sell are: {}".format(sell_order))
-            order.append(sell_order)
+            orders.append(sell_order)
 
         # build buy orders ...
         max_positions_to_buy = self.max_positions - (len(current_position_symbols) - len(to_sell_symbols))
         
-
+        buying_power = self.account.buying_power
         for symbol, _ in to_buy:
             if max_positions_to_buy < 1:
                 logger.info("max_positions_to_buy: {} count is less than 1".format(str(max_positions_to_buy)))
@@ -230,17 +229,18 @@ class Algo:
 
     def submit_order(self, side, wait=0, order_type="market"):
         # process the sell orders first
-        curr_orders = [o for o in self.orders if o["side"] == "sell"]
+        curr_orders = [o for o in self.orders if o["side"] == side]
+        logger.info("curr_orders: {}".format(curr_orders))
         for order in curr_orders:
             try:
-                logger.info("submit(sell): {}".format(order))
+                logger.info("submit({}): {}".format(side, order))
                 self.api.submit_order(symbol=order['symbol'], qty=order['qty'], side=side, type=order_type, time_in_force='day')
             except Exception as e:
                 logger.error("encountered error: {}".format(e))
 
         count = wait
         while count > 0:
-            pending = api.list_orders()
+            pending = self.api.list_orders()
             if len(pending) == 0:
                 logger.info("all {} orders done".format(side))
                 break
@@ -249,8 +249,8 @@ class Algo:
             count -= 1
 
     def trade(self):
-        self.submit_order("sell", wait=30)
-        self.submit_order("buy", wait=30)
+        self.submit_order("sell", wait=300)
+        self.submit_order("buy", wait=300)
 
 
 if __name__ == "__main__":
@@ -259,7 +259,6 @@ if __name__ == "__main__":
     logger.info("start execution")
     
     alg = Algo()
-    algapi = alg.get_api()
 
     while True:
         # clock API returns the server time including
@@ -268,8 +267,8 @@ if __name__ == "__main__":
         now = clock.timestamp
         
         logger.debug("clock.is_open: {}".format(clock.is_open))
-        logger.debug("now: {}".format(now))
-        if clock.is_open and done != now.strftime('%Y-%m-%d'):
+        # logger.debug("now: {}".format(now))
+        if clock.is_open:
 
             alg.set_barsets()
             
@@ -279,8 +278,11 @@ if __name__ == "__main__":
 
             alg.trade()
 
-            done = now.strftime('%Y-%m-%d')
+            done = now.strftime('%Y-%m-%d %H:%M:%S')
             logger.info("done for {}".format(done))
 
-        time.sleep(1)
+            time.sleep(3600 * 3)
+        else:
+            logger.info("sleeping for now .....")
+            time.sleep(3600)
 
