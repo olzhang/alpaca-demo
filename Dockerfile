@@ -1,0 +1,6 @@
+FROM python:3.7.3
+WORKDIR /app
+COPY . /app
+RUN pip install -p
+CMD ["python"]
+
