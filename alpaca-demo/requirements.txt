@@ -1,0 +1,2 @@
+alpaca-trade-api>=0.24
+
