@@ -1,2 +1,2 @@
-alpaca-trade-api>=0.24
-
+alpaca-trade-api==0.21
+Flask==1.0.2

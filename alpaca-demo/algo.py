@@ -45,6 +45,13 @@ class Algo:
         self.load_universe()
         self.set_barsets()
         self.set_scores()
+        self.countdown = 0
+
+    def set_countdown(self, num):
+        self.countdown = num
+
+    def get_countdown(self):
+        return self.countdown
 
     def get_df_barset(self):
         return self.df_barset
@@ -257,32 +264,71 @@ if __name__ == "__main__":
 
     
     logger.info("start execution")
-    
     alg = Algo()
 
-    while True:
-        # clock API returns the server time including
-        # the boolean flag for market open
-        clock = alg.get_api().get_clock()
-        now = clock.timestamp
-        
-        logger.debug("clock.is_open: {}".format(clock.is_open))
-        # logger.debug("now: {}".format(now))
-        if clock.is_open:
+    with open("countdown.txt", "w+") as countdown:
+        countdown.write("0")
 
-            alg.set_barsets()
+    
+    ################################ monitoring ##################################
+    from flask import Flask, jsonify
+    app = Flask(__name__)
+
+    @app.route('/status', methods=["GET"])
+    def get_status():
+        c = 1000
+        with open("countdown.txt", "r") as countdown:
+            c = countdown.read()
+        return jsonify({"countdown": c})
+ 
+    # app.run(debug=True, use_reloader=False, threaded=True)
+    ################################ monitoring ##################################
+    
+    def action():
+        while True:
+            # clock API returns the server time including
+            # the boolean flag for market open
             
-            alg.set_scores()
+            now = clock.timestamp
             
-            alg.set_orders()
+            logger.debug("clock.is_open: {}".format(clock.is_open))
 
-            alg.trade()
+            clock = alg.get_api().get_clock()
+            
+            if clock.is_open:
 
-            done = now.strftime('%Y-%m-%d %H:%M:%S')
-            logger.info("done for {}".format(done))
+                if alg.get_countdown() > 0:
+                    alg.set_countdown(alg.get_countdown() - 1)
+                else:
+                    alg.set_barsets()
+                    
+                    alg.set_scores()
+                    
+                    alg.set_orders()
+                    
+                    alg.trade()
 
-            time.sleep(3600 * 3)
-        else:
-            logger.info("sleeping for now .....")
-            time.sleep(3600)
+                    done = now.strftime('%Y-%m-%d %H:%M:%S')
+                    logger.info("done for {}".format(done))
+                    
+                    alg.set_countdown(3600 * 2)
+            else:
+                logger.debug("sleeping for now .....")
+                if alg.get_countdown() > 0:
+                    alg.set_countdown(alg.get_countdown() - 1)
+                else:
+                    alg.set_countdown(3600)
+
+            with open("countdown.txt", "w+") as countdown:
+                countdown.write(str(alg.get_countdown()))
+
+            time.sleep(1)
+
+    from multiprocessing import Process
+    p = Process(target=app.run)
+    p.start()
+    # app.run(debug=False, use_reloader=False, threaded=True)
+    action()
+    p.join()
+
 
